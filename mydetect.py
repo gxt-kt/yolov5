@@ -37,15 +37,14 @@ from pathlib import Path
 
 import torch
 
-FILE = Path(__file__).resolve() # 获取当前文件路径
+FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
-
-# 如果路径不存在，底下的import就有问题
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from ultralytics.utils.plotting import Annotator, colors, save_one_box
+import gxt.distance
 
 from models.common import DetectMultiBackend
 from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
@@ -99,76 +98,23 @@ def run(
     dnn=False,  # use OpenCV DNN for ONNX inference
     vid_stride=1,  # video frame-rate stride
 ):
-    """
-    Runs YOLOv5 detection inference on various sources like images, videos, directories, streams, etc.
-
-    Args:
-        weights (str | Path): Path to the model weights file or a Triton URL. Default is 'yolov5s.pt'.
-        source (str | Path): Input source, which can be a file, directory, URL, glob pattern, screen capture, or webcam
-            index. Default is 'data/images'.
-        data (str | Path): Path to the dataset YAML file. Default is 'data/coco128.yaml'.
-        imgsz (tuple[int, int]): Inference image size as a tuple (height, width). Default is (640, 640).
-        conf_thres (float): Confidence threshold for detections. Default is 0.25.
-        iou_thres (float): Intersection Over Union (IOU) threshold for non-max suppression. Default is 0.45.
-        max_det (int): Maximum number of detections per image. Default is 1000.
-        device (str): CUDA device identifier (e.g., '0' or '0,1,2,3') or 'cpu'. Default is an empty string, which uses the
-            best available device.
-        view_img (bool): If True, display inference results using OpenCV. Default is False.
-        save_txt (bool): If True, save results in a text file. Default is False.
-        save_csv (bool): If True, save results in a CSV file. Default is False.
-        save_conf (bool): If True, include confidence scores in the saved results. Default is False.
-        save_crop (bool): If True, save cropped prediction boxes. Default is False.
-        nosave (bool): If True, do not save inference images or videos. Default is False.
-        classes (list[int]): List of class indices to filter detections by. Default is None.
-        agnostic_nms (bool): If True, perform class-agnostic non-max suppression. Default is False.
-        augment (bool): If True, use augmented inference. Default is False.
-        visualize (bool): If True, visualize feature maps. Default is False.
-        update (bool): If True, update all models' weights. Default is False.
-        project (str | Path): Directory to save results. Default is 'runs/detect'.
-        name (str): Name of the current experiment; used to create a subdirectory within 'project'. Default is 'exp'.
-        exist_ok (bool): If True, existing directories with the same name are reused instead of being incremented. Default is
-            False.
-        line_thickness (int): Thickness of bounding box lines in pixels. Default is 3.
-        hide_labels (bool): If True, do not display labels on bounding boxes. Default is False.
-        hide_conf (bool): If True, do not display confidence scores on bounding boxes. Default is False.
-        half (bool): If True, use FP16 half-precision inference. Default is False.
-        dnn (bool): If True, use OpenCV DNN backend for ONNX inference. Default is False.
-        vid_stride (int): Stride for processing video frames, to skip frames between processing. Default is 1.
-
-    Returns:
-        None
-
-    Examples:
-        ```python
-        from ultralytics import run
-
-        # Run inference on an image
-        run(source='data/images/example.jpg', weights='yolov5s.pt', device='0')
-
-        # Run inference on a video with specific confidence threshold
-        run(source='data/videos/example.mp4', weights='yolov5s.pt', conf_thres=0.4, device='0')
-        ```
-    """
-    source = str(source)  # source就是实际执行推理的指令比如: python3 detect.py abc/def/nn.jpg
+    source = str(source)
     save_img = not nosave and not source.endswith(".txt")  # save inference images
-    is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS) # 是否以文件格式结尾
-    is_url = source.lower().startswith(("rtsp://", "rtmp://", "http://", "https://")) # 判断是否为摄像头
+    is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
+    is_url = source.lower().startswith(("rtsp://", "rtmp://", "http://", "https://"))
     webcam = source.isnumeric() or source.endswith(".streams") or (is_url and not is_file)
     screenshot = source.lower().startswith("screen")
-    # 判断是网络流
     if is_url and is_file:
         source = check_file(source)  # download
 
-    # 保存文件,如果不存在路径就创建
     # Directories
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Load model
-    device = select_device(device) # 选择是cpu还是gpu
+    device = select_device(device)
     model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
-    # 读取 步长 32,类别名字,模型
-    stride, names, pt = model.stride, model.names, model.pt # 获取读到的文件
+    stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # Dataloader
@@ -260,6 +206,14 @@ def run(
                     label = names[c] if hide_conf else f"{names[c]}"
                     confidence = float(conf)
                     confidence_str = f"{confidence:.2f}"
+                    
+                    myxywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    # print("label",label)
+                    # print("confidence",confidence)
+                    # print("myxywh",myxywh)
+                    positon=gxt.distance.estimator.get_3d_position(myxywh,label) 
+                    print(f"{label} position: {positon} 米")
+
 
                     if save_csv:
                         write_to_csv(p.name, label, confidence_str)
@@ -277,8 +231,10 @@ def run(
                     if save_crop:
                         save_one_box(xyxy, imc, file=save_dir / "crops" / names[c] / f"{p.stem}.jpg", BGR=True)
 
-            # Stream results
+            # show result
             im0 = annotator.result()
+            cv2.imshow(str(p), im0)
+            cv2.waitKey(0)  # 1 millisecond
             if view_img:
                 if platform.system() == "Linux" and p not in windows:
                     windows.append(p)
@@ -393,36 +349,12 @@ def parse_opt():
     parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
     parser.add_argument("--vid-stride", type=int, default=1, help="video frame-rate stride")
     opt = parser.parse_args()
-    # 如果图像大小是一维，就变成两维，数据一样
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(vars(opt))
     return opt
 
 
 def main(opt):
-    """
-    Executes YOLOv5 model inference based on provided command-line arguments, validating dependencies before running.
-
-    Args:
-        opt (argparse.Namespace): Command-line arguments for YOLOv5 detection. See function `parse_opt` for details.
-
-    Returns:
-        None
-
-    Note:
-        This function performs essential pre-execution checks and initiates the YOLOv5 detection process based on user-specified
-        options. Refer to the usage guide and examples for more information about different sources and formats at:
-        https://github.com/ultralytics/ultralytics
-
-    Example usage:
-
-    ```python
-    if __name__ == "__main__":
-        opt = parse_opt()
-        main(opt)
-    ```
-    """
-    # 检测环境是否满足
     check_requirements(ROOT / "requirements.txt", exclude=("tensorboard", "thop"))
     run(**vars(opt))
 
